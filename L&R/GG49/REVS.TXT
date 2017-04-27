@@ -1,0 +1,17 @@
+
+REV 1.50        2007/03/20
+I need an updated version for use with GG49 gyros. I therefore started with 
+version 3.01 for GyroPack and replaced Hz200 with the one from System. Updated 
+GyroPack values to GG49 values in INIT.
+
+REV 1.51       2010/04/20
+
+1) Remove Accelerometer lag statements
+2) Add 15 ms filtering to torque motor outputs
+   Set Lead to .075
+
+REV 1.51V (FOR VORTEX)   2011/05/20
+1) Change CMOS address from 7C-7F to 4C-4F in STST & GTST
+2) Improve Rounding of NSTEPS by adding 0.5 
+      NSTEPS = DATA(3)/ST_SCALE + 0.5 
+

@@ -1,0 +1,27 @@
+C **************** INITFOG ******************************
+        SUBROUTINE INITFOG
+        INTEGER*2 I,IPORT,NPORT(2)
+        DATA NPORT(1) /#0280/  !CROSS COM3
+        DATA NPORT(2) /#0288/  !LONG COM4
+        DO I=1,2
+        IPORT = NPORT(I)+1
+        CALL OUTPUT (IPORT,INT2(0))   !TURN OFF INTERRUPTS
+        IPORT = NPORT(I)+3
+        CALL OUTPUT (IPORT,INT2(#80)) !SET DLAB ON
+        IPORT = NPORT(I)
+        CALL OUTPUT (IPORT,INT2(#03)) !DIVISOR LOW BYTE FOR 38,400 BPS 
+        IPORT = NPORT(I)+1
+        CALL OUTPUT (IPORT,INT2(#00)) !DIVISOR HIGH BYTE
+        IPORT = NPORT(I)+3
+        CALL OUTPUT (IPORT,INT2(#0B)) !8 data,odd parity,one stop bit
+        IPORT = NPORT(I)+2
+        CALL OUTPUT (IPORT,INT2(#C7)) !FIFO CONTROL
+        IPORT = NPORT(I)+4
+        CALL OUTPUT (IPORT,INT2(#0B)) !TURN ON DTR, RTS, AND OUT2
+        ENDDO
+C
+        IPORT = NPORT(1)
+        CALL OUTPUT (IPORT,INT2(#01))   !INITIAL SOFTWARE TRIGGER
+        CALL OUTPUT (IPORT,INT2(#FE))   !CHECKSUM
+        RETURN
+        END

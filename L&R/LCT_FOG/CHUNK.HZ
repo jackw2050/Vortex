@@ -1,0 +1,53 @@
+C ********************* HZ_200 *************************
+        SUBROUTINE HZ_200
+        INCLUDE 'PROLOGUE.INC'
+        CALL IAD        !READ A/D
+        CALL READFOG
+C CROSS ACCELEROMETER LOOP 
+        ACC = IRAW (3,1)
+        FACCX = FACCX + (ACC-FACCX)/9.      !LAG ACCELEROMETER
+        SUMX = (SUMX+(FACCX*PERX))*TORSW
+        OUT = DAMPX*FACCX + SUMX
+C CROSS TORQUE MOTOR LOOP
+C        GX = -IRAW(0,1)
+        GX = -XFOG
+c        FGX = FGX + (GX-FGX)/11000.         !CALCULATE GYRO BIAS
+c        GX = GX - BIASX
+        SUMGX = (SUMGX+OUT+GX)*TORSW
+        TX = TX + 0.1*SUMGX + GX - TIX
+        TIX = TIX - TIX*ALEADX + TX
+        TOR = (GAINX*TX - DATACC(13))*TORSW
+        IF (TOR .GT. +32767.) TOR = +32767.
+        IF (TOR .LT. -32767.) TOR = -32767.
+        IDAC(1) = TOR
+C LONG ACCELEROMETER LOOP
+        ACC = IRAW(4,1)
+        FACCL = FACCL + (ACC-FACCL)/9.      !LAG ACCELEROMETER
+        SUML = (SUML+(FACCL*PERL))*TORSW
+        OUT = DAMPL*FACCL + SUML
+C LONG TORQUE MOTOR LOOP
+C        GL = -IRAW(1,1)
+        GL = -LFOG
+C        FGL = FGL +(GL-FGL)/11000.          !CALCULATE GYRO BIAS
+C        GL = GL - BIASL
+        SUMGL = (SUMGL+OUT+GL)*TORSW
+        TL = TL + 0.1*SUMGL + GL - TIL
+        TIL = TIL - TIL*ALEADL + TL
+        TOR =(GAINL*TL - DATACC(14))*TORSW
+        IF (TOR .GT. +32767.) TOR = +32767.
+        IF (TOR .LT. -32767.) TOR = -32767.
+        IDAC(2) = TOR
+C UPDATE DACS
+        CALL OUTPUTW (IOADD(8),IDAC(1))    
+        CALL OUTPUTW (IOADD(9),IDAC(2))    
+C ACCUMULATE RAW INPUTS
+        DATA0(1) = DATA0(1) + IRAW(3,1)     !XACC
+        DATA0(2) = DATA0(2) + IRAW(4,1)     !LACC
+        DATA0(3) = DATA0(3) + IRAW(5,1)     !BEAM
+        DATA0(4) = DATA0(4) + IRAW(2,1)     !0V
+C SCHEDULE EVENTS
+        I200 = I200+1
+        IF (MOD(I200,8) .EQ. 0) CALL HZ_25
+        IF (I200 .EQ. 201) I200 = 1
+        RETURN
+        END

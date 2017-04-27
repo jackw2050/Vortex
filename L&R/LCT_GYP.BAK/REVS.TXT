@@ -1,0 +1,31 @@
+REV 2.01         2000/07/05
+
+1) UPDATE DEFAULT VALUES IN INIT FROM GG49 TO GYROPACK
+
+REV 2.02        2000/12/11
+
+1) CHANGE SIGN INVERSION STATEMENT IN IAD SO THAT THE CORRECT SIGN IS RETURNED 
+WHEN A/D IS -10V. IRAW = -IRAW DID NOT WORK WHEN A/D OUTPUT IS -10V. REPLACED 
+WITH IRAW = NOT(IRAW). APPEARS TO BE A COMPILER BUG.
+
+2) ADD VERSION NUMBER TO STARTUP MESSAGE SENT ON COM1:
+
+REV 2.03        2001/01/05
+
+1) Fix year end roll-over
+
+REV 2.04  2002/07/16
+
+1) Fix time set algorithm. I had forgotten to reset the tick 
+counter (I200) to 1 when the pulse is received.
+
+REV 2.05 2004/02/11
+
+1) Reverse Stepping Motor Drive for direct drive instead of 1:1 gears
+
+
+REV 2.05V (FOR VORTEX)   2011/11/20
+1) Change CMOS address from 7C-7F to 4C-4F in STST
+2) Improve Rounding of NSTEPS by adding 0.5 
+      NSTEPS = DATA(3)/ST_SCALE + 0.5 
+

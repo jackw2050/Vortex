@@ -1,0 +1,53 @@
+REV 2.01         2000/07/05
+
+1) UPDATE DEFAULT VALUES IN INIT FROM GG49 TO GYROPACK
+
+REV 2.02        2000/12/11
+
+1) CHANGE SIGN INVERSION STATEMENT IN IAD SO THAT THE CORRECT SIGN IS RETURNED 
+WHEN A/D IS -10V. IRAW = -IRAW DID NOT WORK WHEN A/D OUTPUT IS -10V. REPLACED 
+WITH IRAW = NOT(IRAW). APPEARS TO BE A COMPILER BUG.
+
+2) ADD VERSION NUMBER TO STARTUP MESSAGE SENT ON COM1:
+
+REV 2.03        2001/01/05
+
+1) Fix year end roll-over
+
+REV 2.04  2002/07/16
+
+1) Fix time set algorithm. I had forgotten to reset the tick 
+counter (I200) to 1 when the pulse is received.
+
+REV 2.05 2004/02/11
+
+1) Reverse Stepping Motor Drive for direct drive instead of 1:1 gears
+
+REV 3.00 2004/02/14
+
+1) Modify for stepping motor control in embedded processor
+2) Disallow one step ST moves.
+
+REV 3.01   2006/04/26
+
+Reduce motor speed to 355 Hz. This gives motor more starting torque but does 
+not alter throughput because MAXSTEP can remain unchanged.
+
+I need to have both direct drive and geared options. I will just recompile the 
+program as needed. Four lines need to be commented/uncommented as needed: 
+
+c        PRINT *, 'BEGIN GYROPACK SETUP  VER# 3.01D' !Direct
+        PRINT *, 'BEGIN GYROPACK SETUP  VER# 3.01G'  !Geared
+
+c           IDIR = 1  !DIRECT COUPLING
+           IDIR = 0      !GEARED COUPLING
+
+REV 3.02  2008/04/11
+
+1) Fix motor speed to airborne 1:1 gearing
+2) Use jumper determine if motor has geared or direct drive coupling.
+
+REV 3.02V (FOR VORTEX)   2011/05/20
+1) Change CMOS address from 7C-7F to 4C-4F in STST & GTST
+2) Improve Rounding of NSTEPS by adding 0.5 
+      NSTEPS = DATA(3)/ST_SCALE + 0.5 

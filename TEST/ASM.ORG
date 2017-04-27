@@ -1,0 +1,804 @@
+        name    eia232_routines
+;
+; THESE ROUTINES ARE MODIFIED TO USE COM2   99/07/17
+; NITEIA MODIFIED TO INITIALIZE IRQ5
+;
+;  Implementing BREAK transmission and reception.
+;    To send a BREAK from the XT to Meter Control System:
+;      1)  Load $00 into THR in response to THRE
+;      2)  Set BREAK in response to the next THRE
+;      3)  Wait for transmitter to be idle, (LSR(6) TEMT=1), and clear BREAK 
+;          when normal transmission has to be restored.
+;    To respond or capture a BREAK on the XT from the Meter Control System:
+;      1)  Monitor LSR(4) BI for a logic one.
+;      2)  Clear BI by reading LSR with BI set.
+;
+;  82C50A:
+;    2f8h   RBR Read only  THR Write only
+;    2f9h   IER
+;    2fah   IIR
+;    2fbh   LCR
+;    2fch   MCR
+;    2fdh   LSR
+;    2feh   MSR
+;    2ffh   SCR
+;    
+;
+        extrn Hz_200:far
+cseg    segment public
+;
+        assume  cs:cseg
+;
+;****************************************************************************
+qpntr   dd      ?
+nbytes  db      ?
+chksum  db      ?
+d_seg   dw      ?
+intcseg dw      0
+intcoff dw      0
+int5seg dw      0
+int5off dw      0
+table   db      1,1,7,2,24,24,4,4,24,0,8
+;
+;****************************************************************************
+;  niteia : initialize com1 to 9600 baud, 8 data bits, no parity, 2 stop bits
+;
+public  niteia
+niteia  proc    far
+        push    bp              ;save registers
+        mov     bp,sp
+        push    ax
+        push    bx
+        push    dx
+        push    ds
+        push    es
+        mov     cs:d_seg,ds     ;save ds value in code
+        mov     ah,00h          ;function 00h of int 14h
+        mov     al,0e7h         ;9600,8,n,2
+        mov     dx,01h          ;com2
+        int     14h
+        les     bx,dword ptr [bp+6]     ;establish fortran common area
+        mov     ax,word ptr es:[bx]             ;
+        mov     dx,word ptr es:[bx+2]           ;
+        mov     word ptr cs:qpntr,ax            ;
+        mov     word ptr cs:qpntr+2,dx          ;
+        mov     nbytes,00h      ;initialize variables
+        mov     chksum,00h
+        mov     ah,35h          ;get com2 vector
+        mov     al,0bh
+        int     21h
+        mov     intcseg,es
+        mov     intcoff,bx
+        mov     al,0dh          ;get irq5 vector
+        mov     int5seg,es
+        mov     int5off,bx
+        mov     dx,cs
+        mov     ds,dx
+        mov     dx,offset haneia
+        mov     ax,250bh        ;com2
+        int     21h             ;set interrupt vector
+        mov     dx,offset irq5
+        mov     ax,250dh        ;irq5
+        int     21h             ;set interrupt vector
+        in      al,21h          ;get the current PIC mask
+        and     al,0d7h         ;enable INT3 and int5
+        out     21h,al          ;write new mask for com2
+        mov     dx,02f9h
+        mov     al,05h          ;enable RDF and Break int's
+        out     dx,al
+        mov     dx,02f8h        ;clear pending interrupts
+        in      al,dx
+        mov     dx,02f9h        ;clear pending interrupts
+        in      al,dx
+        mov     dx,02fah        ;clear pending interrupts
+        in      al,dx
+        mov     dx,02fbh        ;clear pending interrupts
+        in      al,dx
+        mov     dx,02fdh        ;clear pending interrupts
+        in      al,dx
+        mov     dx,02fch        ;clear pending interrupts
+        in      al,dx           ;enable interrupt by setting out2
+        or      al,08h
+        out     dx,al
+        sti                     ;turn on interrupts
+        pop     es              ;restore registers
+        pop     ds
+        pop     dx
+        pop     bx
+        pop     ax
+        pop     bp
+        ret     04h             ;return to sender plus four (4) bytes
+niteia  endp
+;
+;****************************************************************************
+;  endprg
+;
+public  endprg
+endprg  proc    far
+        push    ax
+        push    dx
+        push    ds
+        in      al,21h
+        or      al,10h
+        out     21h,al
+        mov     dx,intcoff
+        mov     ds,intcseg
+        mov     ah,25h
+        mov     al,0bh
+        int     21h
+        mov     dx,int5off
+        mov     ds,int5seg
+        mov     al,0dh
+        int     21h
+        pop     ds
+        pop     dx
+        pop     ax
+        ret
+endprg  endp
+;****************************************************************************
+;  eiawrt : writes data to ins8250 COM1
+;
+public  eiawrt
+eiawrt  proc    far
+        push    bp              ;save registers
+        mov     bp,sp
+        push    bx
+        push    dx
+        push    es
+        mov     dx,03fdh
+wait1:  in      al,dx           ;wait until transmitter is empty
+        and     al,20h
+        jz      wait1
+        les     bx,dword ptr [bp+6]
+        mov     al,byte ptr es:[bx]
+        mov     dx,03f8h        ;write data to ins8250
+        out     dx,al
+        pop     es              ;restore registers
+        pop     dx
+        pop     bx
+        pop     bp
+        ret     04h             ;return to sender plus four (4) bytes
+eiawrt  endp
+;
+;****************************************************************************
+;  eibwrt : writes data to ins8250 COM2
+;
+public  eibwrt
+eibwrt  proc    far
+        push    bp              ;save registers
+        mov     bp,sp
+        push    bx
+        push    dx
+        push    es
+        mov     dx,02fdh
+wait2:  in      al,dx           ;wait until transmitter is empty
+        and     al,20h
+        jz      wait2
+        les     bx,dword ptr [bp+6]
+        mov     al,byte ptr es:[bx]
+        mov     dx,02f8h        ;write data to ins8250
+;        mov     ah,01h
+;        mov     dx,01h
+;        int     14h
+        out     dx,al
+        pop     es              ;restore registers
+        pop     dx
+        pop     bx
+        pop     bp
+        ret     04h             ;return to sender plus four (4) bytes
+eibwrt  endp
+;
+;****************************************************************************
+;  sendbrk : send BREAK
+;    To send a BREAK from the XT to Meter Control System:
+;      1)  Load $00 into THR in response to THRE
+;      2)  Set BREAK in response to the next THRE
+;      3)  Wait for transmitter to be idle, (LSR(6) TEMT=1), and clear BREAK 
+;          when normal transmission has to be restored.
+;
+public  sendbrk
+sendbrk proc    far
+        push    dx
+        push    ax
+        mov     dx,03fdh
+wtbrk1: in      al,dx           ;wait until THRE
+        and     al,20h
+        jz      wtbrk1
+        mov     al,00h
+        mov     dx,03f8h        ;write $00 to ins8250
+        out     dx,al
+        mov     dx,03fdh
+wtbrk2: in      al,dx           ;wait until THRE
+        and     al,20h
+        jz      wtbrk2
+        mov     dx,03fbh
+        in      al,dx           ;get current LCR
+        or      al,40h
+        out     dx,al           ;send break
+        mov     dx,03fdh
+wtbrk3: in      al,dx           ;wait until TEMT
+        and     al,40h
+        jz      wtbrk3
+        mov     dx,03fbh
+        in      al,dx           ;get modified LCR
+        and     al,0bfh         ;turn off break
+        out     dx,al           ;restore LCR
+        pop     ax
+        pop     dx
+        ret
+sendbrk endp
+;
+;****************************************************************************
+;  haneia : interrupt handler for eia-232 communications
+;
+haneia  proc    far
+        push    ax                      ;save registers
+        push    bx
+        push    cx
+        push    dx
+        push    ds
+        push    es
+        les     bx,dword ptr cs:qpntr   ;point es:[bx] to queue area
+        mov     dx,02fdh                ;get line status register
+        in      al,dx
+        mov     ah,al
+        mov     dx,02f8h                ;get data / clear interrupt source
+        in      al,dx
+        and     ah,1eh                  ;check for transmission errors
+        jnz     badeia                  ;jump if line error
+        test    byte ptr nbytes,0ffh    ;check for first byte of command
+        jnz     bytek                   ;jump if not first byte
+;        cmp     al,00h
+;        jz      xheia
+;        mov     nbytes,al               ;initialize nbytes value
+; determine number of data bytes from command id
+        mov     dx,bx                   ;temp storage for bx
+        xor     ah,ah                   ;clear ah
+        mov     bx,offset cs:table      ;address for nbyte table
+        add     bx,ax                   ;offset in table = command ID
+        mov     ah,cs:[bx]              ;get number of data bytes
+        mov     nbytes,ah
+        inc     nbytes                  ;add one for chksum byte
+        mov     bx,dx                   ;restore bx
+        jmp     entern
+bytek:  dec     nbytes                  ;decrement command counter value
+        jz      gotcs                   ;jump if the data is the checksum
+entern: mov     cl,byte ptr es:[bx+5]   ;retrieve current rq size
+        cmp     byte ptr es:[bx+2],cl   ;compare with the largest rq size
+;        jz      badeia                  ;jump if rq is full
+         jz     full                    ;jump if rq is full
+        mov     cl,byte ptr es:[bx+4]   ;get top pointer
+        dec     cl
+        jnz     lupbck
+        mov     cl,byte ptr es:[bx+2]
+lupbck: mov     byte ptr es:[bx+4],cl
+        mov     ch,00h
+        mov     dx,bx
+        add     bx,cx
+        mov     byte ptr es:[bx+5],al
+        mov     bx,dx
+        inc     byte ptr es:[bx+5]      ;increment rq counter
+        xor     chksum,al               ;update the chksum
+        jmp     xheia
+gotcs:  cmp     chksum,al               ;compare calc. and received chksums
+;        jnz     badeia                  ;jump if chksums do not match
+        jnz     badchk                  ;jump if chksums do not match
+        mov     chksum,00h
+        inc     byte ptr es:[bx+0]      ;inc the number of valid commands
+        jmp     xheia
+badeia: or      byte ptr es:[bx+1],ah   ;store error in RQSTAT
+        or      byte ptr es:[bx+1],01h  ;set bit 1 "bad data in rq"
+        mov     chksum,00h
+        jmp     xheia
+full:   or      byte ptr es:[bx+1],20h  ;set bit 5 "queue full"
+        mov     chksum,00h
+        jmp     xheia
+badchk: or      byte ptr es:[bx+1],40h  ;set bit 6 "bad check sum"
+        mov     chksum,00h
+;        jmp     xheia
+xheia:  mov     al,20h                  ;service the 8259a
+        out     20h,al
+        pop     es                      ;restore registers
+        pop     ds
+        pop     dx
+        pop     cx
+        pop     bx
+        pop     ax
+        iret                            ;interrupt return
+haneia  endp
+;
+        ;********KBRDCK********************************************
+        ;tests for keyboard activity. Returns a zero if inactive; a 
+        ;negative value indicating the number of characters pending in 
+        ;buffer; a positive value indicating number of characters in 
+        ;buffer when a carriage return is received. The CR is not stored
+        ;in the buffer nor counted in the value of the output. The 
+        ;buffer is located in the fortran common area and called
+        ;KYDAT at offset -10 decimal.
+        ;CALL KBRDCK (KYFLAG)
+PUBLIC  kbrdck
+kbrdck  PROC FAR
+        PUSH BP
+        MOV  BP,SP
+        push ax
+        push bx
+        push cx
+        push dx
+        push es
+        ;~~~~~test for keyboard activity~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+        mov ah,0bh                              ;keyboard status
+        int 21h                                 ;get it
+        or al,al                                ;test it
+        jz no_chr                               ;exit if null result
+        ;~~~~~get byte count~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+        les bx,dword ptr [bp+6]                 ;load address 1st argument
+        mov cx,es:[bx]                          ;get buffer count
+        push bx                                 ;save address 1st argument
+        push es
+        ;~~~~~get offset for kydat~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+        les bx,dword ptr qpntr                  ;load address common area
+        sub bx,0ah                              ;offset to "kydat"
+        ;~~~~~get character/no echo/clear buffer~~~~~~~~~~~~~~~~~~~~~~~
+        mov ah,08h                              ;read keyboard/reset buffer
+        int 21h                                 ;reset buffer
+        ;~~~~~check for CR and BS~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+        cmp al,0dh                              ;check for CR
+        jz cr_yes
+        cmp al,08h                              ;check for backspace
+        jz bs_yes
+        ;~~~~~check for too many characters ~~~~~~~~~~~~~~~~~~~~~~~~~~~
+        cmp cx,-10d
+        jz cr_no                                ;ignore character
+        ;~~~~~~store character~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+        sub bx,cx                               ;offset to correct byte
+        mov es:[bx],al                          ;store character in "kydat"
+        dec cx                                  ;decrement buffer counter
+        jmp short bs_no
+        ;~~~~~echo character~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+bs_yes: inc cx
+        sub bx,cx                               ;offset to correct byte
+        mov dl,20h                              ;ascii space
+        mov es:[bx],dl                          ;erase character
+bs_no:  mov ah,02h                              ;screen output for echo
+        mov dl,al                               ;mov data to output reg
+        int 21h                                 ;call display function
+        jmp short cr_no
+        ;~~~~~~store byte counter~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+cr_yes: neg cx                                  ;+ to indicate CR rec'd
+cr_no:  pop es
+        pop bx                                  ;address 1st argument
+        mov es:[bx],cx                          ;return buffer counter
+        ;~~~~~~exit gracefully~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+no_chr: pop es
+        pop dx
+        pop cx
+        pop bx
+        pop ax
+        POP BP
+        RET 04H
+kbrdck  ENDP
+        ;*********CLRSCN**********************************************
+        ;Clears screen and leaves cursor at top of screen
+PUBLIC  clrscn
+clrscn  PROC FAR
+        PUSH BP
+        PUSH ax
+        PUSH bx
+        PUSH cx        
+        PUSH dx
+        mov ah,06                               ;scroll up function
+        mov al,0                                ;blank screen
+        mov ch,0                                ;upper left row
+        mov cl,0                                ;upper left column
+        mov dh,24d                              ;lower right row
+        mov dl,79d                              ;lower right column
+        mov bh,7                                ;blank line attribute
+        int 10h                                 ;video ROM call
+        POP dx
+        POP cx
+        POP bx
+        POP ax
+        POP BP
+        RET
+clrscn  ENDP
+        ;******** OUTPUT **************************************************
+        ;outputs the low byte of an argument to a specified port
+        ;[ie CALL OUTPUT (PORT,VALUE)].
+        ;port and value are integer*2
+PUBLIC  output
+output  PROC FAR
+        PUSH bp
+        MOV  BP,SP
+        push ax
+        push dx
+        ;~~~~~~~~~~~ get port ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+        les bx,dword ptr [bp+0ah]        ;address first argument
+        mov dx,es:[bx]                  ;get port id
+        ;~~~~~~~~~~~ get value ~~~~~~~~~~~~~~~~~~~~~~~~~~~
+        xor ax,ax                       ;zero register
+        les bx,dword ptr [bp+6]         ;address second argument
+        mov ax,es:[bx]                  ;get value
+        ;~~~~~~~~~~~ send value ~~~~~~~~~~~~~~~~~~~~~~~~~~
+        out dx,al                       ;send high byte
+        jmp $+2                         ;Clr ports, delay
+        ;~~~~~~~~~~~EXIT GRACEFULLY~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+        pop dx
+        pop ax
+        MOV SP,BP
+        POP bp
+        RET 08H
+output  ENDP
+        ;******** OUTPUTW ************************************************
+        ;outputs a word to a specified port
+        ;[ie CALL OUTPUTW (PORT,VALUE)].
+        ;port and value are integer*2
+PUBLIC  outputw
+outputw PROC FAR
+        PUSH bp
+        MOV  BP,SP
+        push ax
+        push dx
+        ;~~~~~~~~~~~ get port ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+        les bx,dword ptr [bp+0ah]        ;address first argument
+        mov dx,es:[bx]                  ;get port id
+        ;~~~~~~~~~~~ get value ~~~~~~~~~~~~~~~~~~~~~~~~~~~
+        xor ax,ax                       ;zero register
+        les bx,dword ptr [bp+6]         ;address second argument
+        mov ax,es:[bx]                  ;get value
+        ;~~~~~~~~~~~ send value ~~~~~~~~~~~~~~~~~~~~~~~~~~
+        out dx,ax                       ;send word
+        jmp $+2                         ;Clr ports, delay
+        ;~~~~~~~~~~~EXIT GRACEFULLY~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+        pop dx
+        pop ax
+        MOV SP,BP
+        POP bp
+        RET 08H
+outputw ENDP
+        ;******** FETCH **************************************************
+        ;inputs a byte from a specified port and returns it as the low
+        ;byte of value.
+        ;[ie CALL FETCH (PORT,VALUE)].
+        ;port and value are integer*2
+PUBLIC  fetch
+fetch   PROC FAR
+        PUSH bp
+        MOV  BP,SP
+        push ax
+        push dx
+        ;~~~~~~~~~~~ get port ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+        les bx,dword ptr [bp+0ah]        ;address first argument
+        mov dx,es:[bx]                  ;get port id
+        ;~~~~~~~~~~~ get value ~~~~~~~~~~~~~~~~~~~~~~~~~~~
+        xor ax,ax                       ;zero register
+        in al,dx                        ;get value
+        jmp $+2                         ;Clr ports, delay
+        ;~~~~~~~~~~~ store value ~~~~~~~~~~~~~~~~~~~~~~~~~~
+        les bx,dword ptr [bp+6]         ;address second argument
+        mov es:[bx],ax                  ;store value
+        ;~~~~~~~~~~~EXIT GRACEFULLY~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+        pop dx
+        pop ax
+        MOV SP,BP
+        POP bp
+        RET 08H
+fetch   ENDP
+        ;******** FETCHW **************************************************
+        ;inputs a word from a specified port and returns it in VALUE
+        ;[ie CALL FETCHW (PORT,VALUE)].
+        ;port and value are integer*2
+PUBLIC  fetchw
+fetchw  PROC FAR
+        PUSH bp
+        MOV  BP,SP
+        push ax
+        push dx
+        ;~~~~~~~~~~~ get port ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+        les bx,dword ptr [bp+0ah]        ;address first argument
+        mov dx,es:[bx]                  ;get port id
+        ;~~~~~~~~~~~ get value ~~~~~~~~~~~~~~~~~~~~~~~~~~~
+        xor ax,ax                       ;zero register
+        in ax,dx                        ;get value
+        jmp $+2                         ;Clr ports, delay
+        ;~~~~~~~~~~~ store value ~~~~~~~~~~~~~~~~~~~~~~~~~~
+        les bx,dword ptr [bp+6]         ;address second argument
+        mov es:[bx],ax                  ;store value
+        ;~~~~~~~~~~~EXIT GRACEFULLY~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+        pop dx
+        pop ax
+        MOV SP,BP
+        POP bp
+        RET 08H
+fetchw  ENDP
+        ;******** POSCUR **********************************************
+        ;Positions cursor to a desired location
+        ;CALL POSCUR (row,colmn)
+PUBLIC  poscur
+poscur  PROC FAR
+        PUSH bp
+        MOV  BP,SP
+        push ax
+        push bx
+        push dx
+        ;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+        les bx,dword ptr [bp+6]         ;address second argument
+        mov ax,es:[bx]                  ;get row number
+        mov dh,al                       ;save it
+        les bx,dword ptr [bp+0ah]        ;address first argument
+        mov ax,es:[bx]                  ;get colmn number
+        mov dl,al                       ;save it
+        xor ax,ax                       ;zero ax
+        xor bx,bx                       ;page zero
+        mov ah,02                       ;posn cursor function
+        int 10h                         ;do it
+        ;~~~~~~~~~~~EXIT GRACEFULLY~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+        pop dx
+        pop bx
+        pop ax
+        MOV SP,BP
+        POP bp
+        RET 08H
+poscur  ENDP
+        ;******** GETSEC **************************************************
+        ;reads current second from CMOS clock
+        ;outputs value in BCD format
+        ;[CALL GETSEC (VALUE)].
+        ;value is integer*2
+PUBLIC  GETSEC
+GETSEC  PROC FAR
+        PUSH bp
+        MOV  BP,SP
+        push ax
+        push cx
+        push dx
+        mov ah,02h
+        int 1ah                         ;read cmos clock
+        ;~~~~~~~~~~~ get value ~~~~~~~~~~~~~~~~~~~~~~~~~~~
+        xor ax,ax                       ;zero register
+        mov al,dh                       ;get value
+        ;~~~~~~~~~~~ store value ~~~~~~~~~~~~~~~~~~~~~~~~~~
+        les bx,dword ptr [bp+6]         ;address argument
+        mov es:[bx],ax                  ;store value
+        ;~~~~~~~~~~~EXIT GRACEFULLY~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+        pop dx
+        pop cx
+        pop ax
+        MOV SP,BP
+        POP bp
+        RET 04H
+GETSEC  ENDP
+;
+        ;********* CLEAR1 **********************************************
+        ;Clears bottom window for attention lable
+PUBLIC  clear1  
+clear1  PROC FAR
+        PUSH BP
+        PUSH ax
+        PUSH bx
+        PUSH cx        
+        PUSH dx
+        mov ah,06                               ;scroll up function
+        mov al,0                                ;blank screen
+        mov ch,21d                              ;upper left row
+        mov cl,0                                ;upper left column
+        mov dh,24d                              ;lower right row
+        mov dl,79d                              ;lower right column
+        mov bh,07                               ;blank line attribute
+        int 10h                                 ;video ROM call
+        POP dx
+        POP cx
+        POP bx
+        POP ax
+        POP BP
+        RET
+clear1  ENDP
+        ;********* LPTCHK ***********************************
+COMMENT "Checks LPT1 for proper setup. FORTRAN does not trap
+        these errors. Error code returned in calling argument.
+        CALL LPTCHK (ERROR)    ERROR must be integer*2.
+        Returns:  ERROR = 144d   printer ready
+                        = 008d   off-line
+                        = 200d   power off
+                        = 040d   out-of-paper"
+PUBLIC  lptchk
+lptchk  PROC far
+        PUSH BP
+        MOV BP,SP
+        push ax
+        push dx
+        mov ah,02h                      ;printer status ?
+        mov dx,0                        ;LPT1
+        int 17h                         ;get status
+        mov al,ah
+        mov ah,0
+        les bx,dword ptr [bp+6]         ;load address of argument
+        mov es:[bx],ax                  ;report data
+        ;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+        pop dx
+        pop ax
+        POP BP
+        RET 04h
+lptchk  ENDP
+        ;********* SCROL3 **********************************************
+        ;scrolls data window,a specified number of lines
+        ;CALL SCROL3(value)
+        ;value returned in ax specificies direction and number of
+        ;lines to scroll. Set ah =6 for up and ah = 7 for down.
+        ;set al = number of lines to scroll. ie 601h scrolls up
+        ;one line; 705h down 5 lines
+PUBLIC  scrol3  
+scrol3  PROC FAR
+        PUSH BP
+        MOV  BP,SP
+        PUSH ax
+        PUSH bx
+        PUSH cx        
+        PUSH dx
+        les bx,dword ptr [bp+6]         ;address of argument
+        mov ax,es:[bx]                  ;number of lines to scroll in al
+        mov ch,0                        ;upper left row
+        mov cl,0                        ;upper left column
+        mov dh,20d                      ;lower right row
+        mov dl,79d                      ;lower right column
+        mov bh,7                        ;blank line attribute
+        int 10h                         ;video ROM call
+        POP dx
+        POP cx
+        POP bx
+        POP ax
+        POP BP
+        RET 04H
+scrol3  ENDP
+        ;********* COMCHK ***********************************
+COMMENT "Checks COM1 for proper setup. FORTRAN does not trap
+        these errors. Error code returned in calling argument.
+        A write function is required to get a valid result under
+        all conditions. The check status function does not work
+        until the port has been written to at least once. Hence
+        we send a null character.
+        CALL COMCHK (ERROR)    ERROR must be integer*2.
+        Returns:  ERROR =  0     write ok
+                        =  128   timed out"
+PUBLIC  comchk
+comchk  PROC far
+        PUSH BP
+        MOV BP,SP
+        push ax
+        push dx
+        mov ah,01h                      ;write character to port
+        mov dx,01h                      ;com2
+        mov al,0                        ;character = NUL
+        int 14h                         ;write character and get status
+        mov al,ah                       ;status in ah
+        and ax,80h                      ;mask bit 7
+        les bx,dword ptr [bp+6]         ;load address of argument
+        mov es:[bx],ax                  ;report data
+        ;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+        pop dx
+        pop ax
+        POP BP
+        RET 04h
+comchk  ENDP
+; ************************** IRQ5 ***************************
+PUBLIC  irq5
+irq5    PROC FAR
+        push ax
+        push bx
+        push ds
+        push cx
+        push dx
+        push si
+        push di
+        push bp
+        push es
+        mov ds,cs:d_seg         ;set up program data segment
+        mov es,cs:d_seg         ;set up extra segment
+        sub sp,5eh              ;temporary storage for 80287
+        mov bp,sp
+        fsave [bp]              ;store 80287 state
+        fwait
+        sti
+        call Hz_200
+        mov bp,sp
+        frstor [bp]             ;restore 80287 state
+        add sp,5eh
+        pop es
+        pop bp
+        pop di
+        pop si
+        pop dx
+        pop cx
+        pop ds
+        pop bx
+        cli
+        mov     al,20h                  ;service the 8259a
+        out     20h,al
+        pop ax
+        iret
+irq5    ENDP
+        ;********* STST ***********************************
+COMMENT "Stores the spring tension in unused memory in the CMOS
+        clock. Memory cells 4c to 4f are used in Vortex.
+        CALL STST(value)
+        value is REAL*4"
+PUBLIC  stst
+stst    PROC far
+        PUSH BP
+        MOV BP,SP
+        les bx,dword ptr [bp+6]         ;load address of argument
+        mov dx,es:[bx]                  ;get data
+        mov al,4ch                      ;cell for ST first byte
+        out 70h,al                      ;select it
+        jmp $+2                         ;clr ports,delay
+        mov al,dh
+        out 71h,al                      ;store first byte
+        jmp $+2                         ;clr ports,delay
+        mov al,4dh                      ;cell for second byte
+        out 70h,al                      ;select it
+        jmp $+2                         ;clr ports,delay
+        mov al,dl
+        out 71h,al                      ;store second byte
+        jmp $+2                         ;clr ports,delay
+        mov dx,es:[bx]+2                ;get more data
+        mov al,4eh                      ;cell for third byte
+        out 70h,al                      ;select it
+        jmp $+2                         ;clr ports,delay
+        mov al,dh
+        out 71h,al                      ;store third byte
+        jmp $+2                         ;clr ports,delay
+        mov al,4fh                      ;cell for fourth byte
+        out 70h,al                      ;select it
+        jmp $+2                         ;clr ports,delay
+        mov al,dl
+        out 71h,al                      ;store second byte
+        jmp $+2                         ;clr ports,delay
+        ;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+        POP BP
+        RET 04h
+stst    ENDP
+        ;********* GTST ***********************************
+COMMENT "Retrieves spring tension from CMOS clock memory
+        value must be loaded with STST prior to use
+        CALL GTST(value)
+        value is REAL*4"
+PUBLIC  gtst
+gtst    PROC far
+        PUSH BP
+        MOV BP,SP
+        les bx,dword ptr [bp+6]         ;load address of argument
+        mov al,4ch                      ;cell for first byte
+        out 70h,al                      ;select it
+        jmp $+2                         ;clr ports,delay
+        in al,71h                       ;get first byte
+        jmp $+2                         ;clr ports,delay
+        mov dh,al
+        mov al,4dh                      ;cell for second byte
+        out 70h,al                      ;select it
+        jmp $+2                         ;clr ports,delay
+        in al,71h                       ;get second byte
+        jmp $+2                         ;clr ports,delay
+        mov dl,al
+        mov es:[bx],dx                  ;return two bytes
+        mov al,4eh                      ;cell for third byte
+        out 70h,al                      ;select it
+        jmp $+2                         ;clr ports,delay
+        in al,71h                       ;get third byte
+        jmp $+2                         ;clr ports,delay
+        mov dh,al
+        mov al,4fh                      ;cell for fourth byte
+        out 70h,al                      ;select it
+        jmp $+2                         ;clr ports,delay
+        in  al,71h                      ;get fourth byte
+        jmp $+2                         ;clr ports,delay
+        mov dl,al
+        mov es:[bx]+2,dx                ;return two more bytes
+        ;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+        POP BP
+        RET 04h
+gtst    ENDP
+;
+;
+cseg    ends
+;
+        end
+

@@ -1,0 +1,14 @@
+To assemble my asm.asm with MASM611 use
+ML /c asm.asm to produce an obj file
+To Link use
+LINK fortran asm  where
+fortran is the name of the fortran obj file to be linked and
+asm is the name assembly file to be linked.
+for example:
+ML /c asm.asm
+LINK tstcmos asm
+
+Running \masm611\bin\NEW-VARS before you start puts a path to ML and LINK at 
+the start of the path command so it finds them first.
+
+See TSTCMOS.bat for an example

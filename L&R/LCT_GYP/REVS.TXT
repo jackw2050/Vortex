@@ -1,0 +1,40 @@
+REV 2.01         2000/07/05
+
+1) UPDATE DEFAULT VALUES IN INIT FROM GG49 TO GYROPACK
+
+REV 2.02        2000/12/11
+
+1) CHANGE SIGN INVERSION STATEMENT IN IAD SO THAT THE CORRECT SIGN IS RETURNED 
+WHEN A/D IS -10V. IRAW = -IRAW DID NOT WORK WHEN A/D OUTPUT IS -10V. REPLACED 
+WITH IRAW = NOT(IRAW). APPEARS TO BE A COMPILER BUG.
+
+2) ADD VERSION NUMBER TO STARTUP MESSAGE SENT ON COM1:
+
+REV 2.03        2001/01/05
+
+1) Fix year end roll-over
+
+Rev 2.04        2002/07/16
+
+1) Fix time set algorithm. I had forgotten to reset the tick 
+counter (I200) to 1 when the pulse is received.
+
+Rev 4.00(LCT)     2007/11/27
+1) Make changes to accommodate FogPack
+I recompiled it 2008/07/15 looking for a problem that ended up to be in the 
+host software. No changes made to this code. 
+
+Rev 4.01(LCT)      2009/02/05
+
+Update platform default parameters to accommodate FogPack
+
+REV 2.04V(LCT)
+1) I was unable to compile vers 2.04 for Vortex to I regressed version 4.01 to 
+2.04 and then added the changes for vortex
+        a) Replace Hz200
+        b) Delete INITFOG,READFOG,CALL INITFOG
+        c) Reset parameters in INIT to GyroPack values
+2) Change CMOS address from 7C-7F to 4C-4F in STST & GTST
+3) Improve Rounding of NSTEPS by adding 0.5 
+      NSTEPS = DATA(3)/ST_SCALE + 0.5   (two places)
+

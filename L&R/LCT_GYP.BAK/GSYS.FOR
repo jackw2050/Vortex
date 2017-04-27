@@ -1,0 +1,782 @@
+        PROGRAM SYSTEM                  !VERS 2.04V
+c GyroPack version
+        INCLUDE 'PROLOGUE.INC'
+        INCLUDE 'RICHARD.INC'
+        INTEGER*2 ST_MAX
+        LOGICAL LERR,SETTIM,SETDAT
+C
+        PRINT *, 'BEGIN GYROPACK SETUP  VER# 2.04V'
+        DO I = 0,15
+        IOADD(I) = #300 + I*2     !SET BOARD BASE ADDRESS HERE
+        ENDDO
+C
+c        call init
+C
+        CALL FETCHW (IOADD(15),PORTCD)
+        ST_MAX = 2200
+        ST_SCALE = .0347222
+       IF (BTEST(PORTCD,6)) THEN
+           ST_MAX = 2900
+           ST_SCALE = .1041666
+        ENDIF
+        CALL INIT
+c        print*, 'a'
+        CALL NITEIA (LOCFAR(RQCMDS))
+c        print*, 'c'
+        CALL CLRQ
+        CALL PUT_DATA(INT2(1))          
+c        PRINT*, 'COMPLETE SETUP'
+        DO WHILE (.TRUE.)               !LOOP FOREVER
+C DO STUFF AT ONE SECOND RATE
+          IF(I1SEC .EQ. 1) THEN
+            ISEC = ISEC+1
+            I1SEC = 0
+            PORTAB = IBCHNG(PORTAB,10)    !TOGGLE BIT 8 ONE SEC PULSE
+            CALL OUTPUTW(IOADD(15),PORTAB)
+            CALL HEATCHK
+            CALL DUMPCHK
+            AVGB(0) = DATA(5)
+            CALL FIL320
+            CALL FETCHW (IOADD(15),PORTCD)             !GET THREE BYTES OF
+            CALL FETCHW (INT2((IOADD(15)-2)),PORTEF)   !PARALLEL DATA
+C DO STUFF AT 10 SEC RATE
+             IF(MOD(ISEC,10) .EQ. 0) THEN
+              IF(LARMSW .NE. 0) CALL ALARM
+              BEAM = BSCALE*AVGB(3)
+              DELB = BEAM - OLDB
+              OLDB = BEAM
+c              IF(STSW  .NE. 0) THEN
+c                ISTEPS = (BEAM*.0367) + (DELB*3.33)
+c                IF(ISTEPS .GT. ST_MAX)  ISTEPS =  ST_MAX
+c                IF(ISTEPS .LT. -ST_MAX) ISTEPS = -ST_MAX
+c                CALL RELMOV
+c              ENDIF
+C DO STUFF AT MINUTE RATE
+               IF (ISEC .GT. 59) THEN
+                 ISEC = 0
+                 MIN=MIN+1
+C DO HOURLY STUFF
+                 IF(MIN .GT. 59) THEN
+                   MIN = 0
+                   IHR=IHR+1
+C D0 DAILY STUFF
+                  IF (IHR .GT. 23) THEN
+                     IHR = 0
+                     IDAY = IDAY+1
+                     MDAY=0
+                     MON=0
+                     LERR=SETTIM(IHR,MIN,ISEC,INT2(0))
+                     CALL JULIAN(MDAY,MON,IYR,IDAY)
+                     LERR=SETDAT(IYR,MON,MDAY)
+C D0 YEARLY STUFF
+                     LPDAYS = 366
+                     IF(MOD(IYR,4) .EQ. 0) LPDAYS = 367
+                     IF(IDAY .EQ. LPDAYS) THEN
+                       IDAY = 1
+                       IYR=IYR+1
+                     ENDIF              !YEARLY
+                   ENDIF                !DAILY
+                 ENDIF                  !HOURLY
+               ENDIF                    !MINUTES
+             ENDIF                      !10 SEC
+C           call put_data(int2(0))
+          IF (DATASW .EQ. 1) CALL PUT_DATA(INT2(0))
+             IF(CMD.NE.0 .OR. TIMEOUT.NE.0 .OR. CHKSUM.NE.0) THEN
+                CALL CLRQ
+                CMD = 0
+                TIMEOUT = 0
+                CHKSUM = 0
+             ENDIF
+          ENDIF                         !1 SEC
+        IF (RQCMDS .NE. 0) CALL GET_CMDS
+        ENDDO
+        END
+C ****************** INIT ***************************************
+        SUBROUTINE INIT
+        INCLUDE 'PROLOGUE.INC'
+        INCLUDE 'RICHARD.INC'
+        ALEADX = .4
+        ALEADL = .4
+        GAINX = .25
+        GAINL = .25
+        PERX = .000011 
+        PERL = .000011 
+        DAMPX = .12 
+        DAMPL = .12 
+        COMPF(0) = 0. 
+        COMPF(1) = 0.
+        IHEAT(0) = 95    
+        IHEAT(1) = 95
+        IHEAT(2) = 95
+        FIRST = 0 
+        LARMSW = 0 
+        TORSW = 0 
+        DATASW = 0 
+        FGX = 0.
+        FGL = 0.
+        BIASL = 0.
+        BIASX = 0.
+C
+        DO I=0,15
+          IRAW(i,0) = 0 
+          IRAW(i,1) = 0 
+        ENDDO
+        IRAW(0,0) = 1 
+        IRAW(0,0) = ISHFT(IRAW(0,0),8)
+        IRAW(1,0) = 1
+        IRAW(1,0) = ISHFT(IRAW(1,0),8)
+Cc temp set beam gain to x4
+C        IRAW(5,0) = 2
+C        IRAW(5,0) = ISHFT(IRAW(5,0),8)
+        DO I=1,4
+           DATA0(i) = 0 
+           DATA25(i) = 0
+        ENDDO
+        DO I=1,14
+           DATACC(i) = 0 
+        ENDDO
+        DO I=1,23
+          DATA(i) = 0. 
+        ENDDO
+C INITIALIZE OUTPUTS
+        PORTAB = #80    !ENABLE SM;A/D CH 0;GAIN=1  
+        CALL OUTPUTW(IOADD(15),PORTAB)
+C INITIALIZE TIMER 0    ! STEPPING MOTOR CONTROL
+        IVALUE = #36    !MODE 3
+        CALL OUTPUT(IOADD(7),IVALUE)
+        IVALUE = 23864                      !300 Hz     7.1591/300
+        IF (BTEST(PORTCD,6)) IVALUE =17898  !400 Hz     7.1591/400
+        ITEMP = IAND(IVALUE,#FF)
+        CALL OUTPUT(IOADD(4),ITEMP)
+        ITEMP = ISHFT(IVALUE,-8)
+        CALL OUTPUT(IOADD(4),ITEMP)
+C INITIALIZE TIMER 1    ! STEPPING MOTOR CONTROL
+        IVALUE = #72    !MODE 1
+        CALL OUTPUT(IOADD(7),IVALUE)
+C (FAKE A SMALL MOVE ?)
+C INITIALIZE TIMER 2    ! uDELAY
+        IVALUE = #B0                        !MODE 0
+        CALL OUTPUT (IOADD(7),IVALUE)
+C ZERO DACS
+        DO I=1,4
+           IDAC(I) = 0
+        ENDDO
+        CALL OUTPUTW (IOADD(8),IDAC(1))    
+        CALL OUTPUTW (IOADD(9),IDAC(2))    
+        CALL OUTPUTW (IOADD(10),IDAC(3))    
+        CALL OUTPUTW (IOADD(11),IDAC(4))    
+C INITIALIZE TIME
+        CALL GETDAT(IYR,MON,ITEMP)
+        CALL JULIAN(ITEMP,MON,IYR,IDAY)
+        CALL GETTIM(IHR,MIN,ISEC,ITEMP)
+cC INITIALIZE SPRING TENSION
+c        OPEN(1,FILE='STFILE',ACCESS='DIRECT',RECL=4,FORM='UNFORMATTED',
+c     1  ERR=20,STATUS='OLD')
+cC        print *, 'stfile1'
+c        READ (1,REC=1) NSTEPS
+cC        print *, 'stfile3',nsteps
+c        GOTO 21
+c20      CONTINUE
+cC        print *, 'stfile4',nsteps
+c        NSTEPS = 10000./ST_SCALE
+c        OPEN(1,FILE='STFILE',ACCESS='DIRECT',RECL=4,FORM='UNFORMATTED')
+c        WRITE (1,REC=1) NSTEPS
+c        CLOSE (1)
+c21      CONTINUE
+cC        print *, 'stfile5',nsteps
+c        DATA(3) = NSTEPS*ST_SCALE
+c        IF (DATA(3) .GT. 20000. .OR. DATA(3) .LE. 0) GOTO 20
+C  INITIALIZE SPRING TENSION FROM CMOS CLOCK
+        CALL GTST(NSTEPS)
+        DATA(3) = NSTEPS*ST_SCALE
+        IF (DATA(3) .GT. 20000. .OR. DATA(3) .LE. 0) THEN
+            DATA(3) = 10000.
+            NSTEPS = DATA(3)/ST_SCALE
+            CALL STST(NSTEPS)
+        ENDIF
+        RETURN
+        END
+C   ************* JULIAN ***************************************
+C converts from julian day format to IBM date format and vice-versa
+C taking care of leap-years.
+c Set NDAY to zero to calculate day, month
+        SUBROUTINE JULIAN (NDAY,MON,NYR,JDAY)
+        IMPLICIT INTEGER*2 (I-N)
+        DIMENSION ICAL(13)
+        DATA ical/0,31,59,90,120,151,181,212,243,273,304,334,400/
+        IF (NDAY .EQ. 0) THEN
+           MON = 0
+           LPDAY = 0
+           IF(MOD(NYR,4).EQ.0 .AND. JDAY .GT. 59) LPDAY = 1
+           NDAY = JDAY-LPDAY
+100        MON = MON+1
+           IF(ICAL(MON) .LT. NDAY) GOTO 100
+           MON = MON-1
+           NDAY = NDAY-ICAL(MON)
+           IF (JDAY .EQ. 60) NDAY = NDAY+1
+        ELSE
+           LPDAY = 0
+           IF (MOD(NYR,4) .EQ. 0 .AND. MON .GT. 2) LPDAY = 1
+           JDAY = ICAL(MON)+NDAY+LPDAY
+        ENDIF
+        RETURN
+        END
+C ****************** PUT_DATA ***********************************
+        SUBROUTINE PUT_DATA (ID)
+        INCLUDE 'PROLOGUE.INC'
+        INCLUDE 'RICHARD.INC'
+        INTEGER*2 TMT(0:NMAX)
+c        if (id .ne. 0) print*, 'put',id
+        IF (ID .EQ. 0) THEN
+            TMT(0) = 78
+            TMT(1) = ID
+            TMT(2) = IAND(IYR,#FF)
+            TMT(3) = IAND(ISHFT(IYR,-8),#FF)
+            TMT(4) = IAND(IDAY,#FF)
+            TMT(5) = IAND(ISHFT(IDAY,-8),#FF)
+            TMT(6) = IAND(IHR,#FF)
+            TMT(7) = IAND(MIN,#FF)
+            TMT(8) = IAND(ISEC,#FF)
+            CALL DICE(DATA(3),TMT(12),TMT(11),TMT(10),TMT(9))   !ST
+            CALL DICE(DATA(5),TMT(16),TMT(15),TMT(14),TMT(13))  !BEAM
+            CALL DICE(DATA(6),TMT(20),TMT(19),TMT(18),TMT(17))  !VCC
+            CALL DICE(DATA(7),TMT(24),TMT(23),TMT(22),TMT(21))  !AL
+            CALL DICE(DATA(8),TMT(28),TMT(27),TMT(26),TMT(25))  !AX
+            CALL DICE(DATA(9),TMT(32),TMT(31),TMT(30),TMT(29))  !VE
+            CALL DICE(DATA(10),TMT(36),TMT(35),TMT(34),TMT(33)) !AX2
+            CALL DICE(DATA(11),TMT(40),TMT(39),TMT(38),TMT(37)) !XACC2
+            CALL DICE(DATA(12),TMT(44),TMT(43),TMT(42),TMT(41)) !LACC
+            CALL DICE(DATA(13),TMT(48),TMT(47),TMT(46),TMT(45)) !XACC
+            CALL DICE(DATA(14),TMT(52),TMT(51),TMT(50),TMT(49)) !LACC
+C
+            TMT(53) = IAND(IRAW(12,1),#FF)
+            TMT(54) = IAND(ISHFT(IRAW(12,1),-8),#FF)            !AUX1
+            TMT(55) = IAND(IRAW(13,1),#FF)
+            TMT(56) = IAND(ISHFT(IRAW(13,1),-8),#FF)            !AUX2
+            TMT(57) = IAND(IRAW(14,1),#FF)
+            TMT(58) = IAND(ISHFT(IRAW(14,1),-8),#FF)            !AUX3
+            TMT(59) = IAND(IRAW(15,1),#FF)
+            TMT(60) = IAND(ISHFT(IRAW(15,1),-8),#FF)            !AUX4
+C
+7           TMT(61) = IAND(PORTEF,#FF)                          !PARDAT
+            TMT(62) = IAND(ISHFT(PORTEF,-8),#FF)
+            TMT(63) = IAND(ISHFT(PORTCD,-8),#FF)
+C
+            TMT(64) = IAND(IRAW(6,1),#FF)
+            TMT(65) = IAND(ISHFT(IRAW(6,1),-8),#FF)             !+28V
+            TMT(66) = IAND(IRAW(7,1),#FF)
+            TMT(67) = IAND(ISHFT(IRAW(7,1),-8),#FF)             !-28V
+            TMT(68) = IAND(IRAW(8,1),#FF)
+            TMT(69) = IAND(ISHFT(IRAW(8,1),-8),#FF)             !+24V
+            TMT(70) = IAND(IRAW(9,1),#FF)
+            TMT(71) = IAND(ISHFT(IRAW(9,1),-8),#FF)             !+15V
+            TMT(72) = IAND(IRAW(10,1),#FF)
+            TMT(73) = IAND(ISHFT(IRAW(10,1),-8),#FF)            !-15V
+            TMT(74) = IAND(IRAW(11,1),#FF)
+            TMT(75) = IAND(ISHFT(IRAW(11,1),-8),#FF)            !+5V
+C
+            TMT(76) = ALARMFL
+            TMT(76) = IOR(TMT(76),XHTR*2) 
+            TMT(76) = IOR(TMT(76),LHTR*4)
+            TMT(76) = IOR(TMT(76),MHTR*8)
+            TMT(76) = IOR(TMT(76),DUMP*16)
+            TMT(76) = IOR(TMT(76),CMD*32)
+            TMT(76) = IOR(TMT(76),TIMEOUT*64)
+            TMT(76) = IOR(TMT(76),CHKSUM*128)
+C
+            TMT(77) = IAND(PORTCD,#FF)
+            NBYTE = 77
+        ELSEIF (ID .EQ. 1) THEN                 ! REBOOT INDICATOR
+            TMT(0) = 2              !NUMBER OF DATA BYTES + CHKSUM
+            TMT(1) = ID
+            NBYTE = 1
+        ELSEIF (ID .EQ. 2) THEN         !TIME UPDATE SUCCESSFUL
+            TMT(0) = 2
+            TMT(1) = ID
+            NBYTE = 1
+        ELSEIF (ID .EQ. 3) THEN         !TIME UPDATE FAILED
+            TMT(0) = 2
+            TMT(1) = ID
+            NBYTE = 1
+        ELSEIF (ID .EQ. 4) THEN         !SEND GYRO BIAS DATA
+            TMT(0) = 10
+            TMT(1) = ID
+            CALL DICE(FGX,TMT(5),TMT(4),TMT(3),TMT(2))  !OBSERVED XBIAS
+            CALL DICE(FGL,TMT(9),TMT(8),TMT(7),TMT(6))  !OBSERVED LBIAS
+            NBYTE = 9
+        ELSE
+            RETURN
+        ENDIF
+        CALL XMIT(TMT,NBYTE)
+        END
+c ************************ DICE ******************************
+        SUBROUTINE DICE (FIN,HI,M2,M1,LO)
+C BREAKS A FLOATING POINT WORD INTO FOR BYTES FOR XMISSION
+        INTEGER*4 ITEMP
+        INTEGER*2 HI,M2,M1,LO
+        EQUIVALENCE (ITEMP,AIN)
+        AIN = FIN
+        LO = IAND(ITEMP,#FF)
+        M1 = IAND(ISHFT(ITEMP,-8),#FF)
+        M2 = IAND(ISHFT(ITEMP,-16),#FF)
+        HI = IAND(ISHFT(ITEMP,-24),#FF)
+        RETURN
+        END
+C ********************* GET_CMDS ******************************
+        SUBROUTINE GET_CMDS
+        INCLUDE 'PROLOGUE.INC'
+        INTEGER*4 ITEMP
+        EQUIVALENCE (ITEMP, FTEMP)
+        INCLUDE 'RICHARD.INC'
+        INTEGER*2 RCMD(NMAX)
+        LOGICAL LERR,SETTIM,SETDAT
+C RECEIVE A RECORD
+        IF (RQSTAT .NE. 0) GOTO 100
+        CALL RECV(RCMD,I)
+        IF (RCMD(1) .EQ. 0) THEN             !ONE SEC DATA RECORD
+c        print *, 'cmd 0',rcmd(2)
+            PORTAB = IAND(PORTAB,#FF00)      !CLEAR LOWBYTE
+            RCMD(2) = IAND(RCMD(2),#FF)      !CLEAR HIGHBYTE
+            PORTAB = IOR(PORTAB,RCMD(2))     !ADD NEW LOW BYTE
+            CALL OUTPUTW(IOADD(15),PORTAB)       !SEND IT
+            RETURN
+        ELSEIF (RCMD(1) .EQ. 1) THEN
+c        print *, 'cmd 1',rcmd(2)
+            TORSW = 0
+            STSW = 0
+            LARMSW = 0
+            DATASW = 0
+            ALARMFL = 0
+            IF(BTEST(RCMD(2),0)) TORSW  = 1
+            IF(BTEST(RCMD(2),1)) STSW   = 1
+            IF(BTEST(RCMD(2),2)) LARMSW = 1
+            IF(BTEST(RCMD(2),3)) DATASW = 1
+            IF(BTEST(RCMD(2),4)) ALARMFL  = 1
+            RETURN
+        ELSEIF (RCMD(1) .EQ. 2) THEN
+c        print *, 'cmd 2'
+            ITEMP = 0
+10          CONTINUE
+            CALL FETCHW (IOADD(15),PORTCD)
+            IF(BTEST(PORTCD,7)) THEN     !WHILE SYNCH PULSE HIGH
+                CALL DELAY(1000)         !TEST EVERY MS
+                ITEMP = ITEMP+1
+                IF (ITEMP .EQ. 70000) GOTO 200  !TIME OUT AFTER 70 SEC
+                GOTO 10
+            ENDIF
+            I200 = 1
+            CALL GET2(IYR,RCMD(3),RCMD(2))
+            CALL GET2(IDAY,RCMD(5),RCMD(4))
+            IHR = RCMD(6)
+            MIN = RCMD(7)
+            ISEC = RCMD(8)
+            MDAY=0
+            MON=0
+            LERR=SETTIM(IHR,MIN,ISEC,INT2(0))
+            IF (.NOT.LERR) GOTO 200
+            CALL JULIAN(MDAY,MON,IYR,IDAY)
+            LERR=SETDAT(IYR,MON,MDAY)
+            IF(.NOT.LERR) GOTO 200
+            CALL PUT_DATA (INT2(2))        ! SIGNAL TIME HAS BEEN SET
+            RETURN
+        ELSEIF (RCMD(1) .EQ. 3) THEN       ! SLEW ST
+c        print *, 'recd cmd 3',rcmd(2),rcmd(3)
+            CALL GET2(ISTEPS,RCMD(3),RCMD(2))
+c        print *, 'cmd 3a',isteps
+            CALL RELMOV
+            RETURN
+        ELSEIF (RCMD(1) .EQ. 4) THEN    !UPDATE CROSS AXIS PARMS
+            CALL GET4(ITEMP,RCMD(5),RCMD(4),RCMD(3),RCMD(2))
+            PERX = FTEMP
+            CALL GET4(ITEMP,RCMD(9),RCMD(8),RCMD(7),RCMD(6))
+            DAMPX = FTEMP
+            CALL GET4(ITEMP,RCMD(13),RCMD(12),RCMD(11),RCMD(10))
+            GAINX = FTEMP
+            CALL GET4(ITEMP,RCMD(17),RCMD(16),RCMD(15),RCMD(14))
+            ALEADX = FTEMP
+            CALL GET4(ITEMP,RCMD(21),RCMD(20),RCMD(19),RCMD(18))
+            COMPF(0) = FTEMP
+            CALL GET4(ITEMP,RCMD(25),RCMD(24),RCMD(23),RCMD(22))
+            AFILT(5) = FTEMP
+c        print *, 'recd cmd 4',perx
+            RETURN
+        ELSEIF (RCMD(1) .EQ. 5) THEN     !UPDATE LONG AXIS PARMS
+c        print *, 'recd cmd 5'
+            CALL GET4(ITEMP,RCMD(5),RCMD(4),RCMD(3),RCMD(2))
+            PERL = FTEMP
+            CALL GET4(ITEMP,RCMD(9),RCMD(8),RCMD(7),RCMD(6))
+            DAMPL = FTEMP
+            CALL GET4(ITEMP,RCMD(13),RCMD(12),RCMD(11),RCMD(10))
+            GAINL = FTEMP
+            CALL GET4(ITEMP,RCMD(17),RCMD(16),RCMD(15),RCMD(14))
+            ALEADL = FTEMP
+            CALL GET4(ITEMP,RCMD(21),RCMD(20),RCMD(19),RCMD(18))
+            COMPF(1) = FTEMP
+            CALL GET4(ITEMP,RCMD(25),RCMD(24),RCMD(23),RCMD(22))
+            AFILT(6) = FTEMP
+            RETURN
+        ELSEIF (RCMD(1) .EQ. 6) THEN      !AUX A/D GAINS
+c        print *, 'recd cmd 6'
+            IRAW(12,0) = ISHFT(RCMD(2),10)
+            IRAW(13,0) = ISHFT(RCMD(3),10)
+            IRAW(14,0) = ISHFT(RCMD(4),10)
+            IRAW(15,0) = ISHFT(RCMD(5),10)
+            RETURN
+        ELSEIF (RCMD(1) .EQ. 7) THEN      !UPDATE SPRING TENSION
+c        print *, 'recd cmd 7'
+            CALL GET4(ITEMP,RCMD(5),RCMD(4),RCMD(3),RCMD(2))
+            DATA(3) = FTEMP
+c        print *,'7,1 st_scale'
+            NSTEPS = DATA(3)/ST_SCALE
+c        print *,'7,2'
+c        OPEN(1,FILE='STFILE',ACCESS='DIRECT',RECL=4,FORM='UNFORMATTED')
+c            WRITE (1,REC=1) NSTEPS
+c            CLOSE(1)
+c        print *,'7,3',nsteps
+            CALL STST(NSTEPS)
+            RETURN
+        ELSEIF (RCMD(1) .EQ. 8) THEN    !PHASE PARAMETERS
+c        print *, 'recd cmd 8'
+            CALL GET4(ITEMP,RCMD(5),RCMD(4),RCMD(3),RCMD(2))
+            AFILT(1) = FTEMP
+            CALL GET4(ITEMP,RCMD(9),RCMD(8),RCMD(7),RCMD(6))
+            AFILT(2) = FTEMP
+            CALL GET4(ITEMP,RCMD(13),RCMD(12),RCMD(11),RCMD(10))
+            AFILT(4) = FTEMP
+            RETURN
+        ELSEIF (RCMD(1) .EQ. 9) THEN   !REQUEST TO SEND GYRO BIAS 
+            CALL PUT_DATA (INT2(4))
+            RETURN
+        ELSEIF (RCMD(1) .EQ. 10) THEN  !UPDATE GYRO BIAS          
+            CALL GET4(ITEMP,RCMD(5),RCMD(4),RCMD(3),RCMD(2))
+            BIASX = FTEMP
+            CALL GET4(ITEMP,RCMD(9),RCMD(8),RCMD(7),RCMD(6))
+            BIASL = FTEMP
+            RETURN
+        ELSE
+            CMD = 1
+        ENDIF
+100     IF (BTEST(RQSTAT,6)) THEN
+            CHKSUM = 1
+        ELSE
+            TIMEOUT = 1
+        ENDIF
+        CALL CLRQ
+        RETURN
+200     CALL PUT_DATA(INT2(3))
+        RETURN
+        END
+c********************** UDELAY **********************
+        SUBROUTINE UDELAY(NDEL,ITIC)
+C USES THE 82C54 TIMER 2 TO CREATE SHORT ACCURATE DELAYS
+C ITIC IS THE TICK LENGTH IN MICROSECONDS
+C NDEL IS THE NUMBER OF TICKS TO DELAY
+C NDEL AND ITIC ARE INTEGER*4
+C ITIC MAY NOT BE LESS THAN 1 OR GREATER THAN 4000
+C CLOCK IS 7.16 MHz
+        INCLUDE 'PROLOGUE.INC'
+        INTEGER*4 NDEL,ITIC
+        DO I=1,NDEL      
+        ICOUNT = 0
+C        IPORT = #30C
+        IVALUE = INT2(7*ITIC)         !DIVISOR FOR TIC SIZE
+        ITEMP = IAND(IVALUE,#FF)
+        CALL OUTPUT (IOADD(6),ITEMP)
+        ITEMP = ISHFT(IVALUE,-8)
+        CALL OUTPUT (IOADD(6),ITEMP)
+C       GET STATUS
+100     CONTINUE
+        ICOUNT = ICOUNT+1
+        IF (ICOUNT .GT. 30000) GOTO 200
+C        IPORT = #30E
+        IVALUE = #E8                            ! LATCH STATUS
+        CALL OUTPUT (IOADD(7),IVALUE)
+C        IPORT = #30C                            
+        CALL FETCH (IOADD(6),IVALUE)            ! READ STATUS
+        IF (.NOT.(BTEST(IVALUE,7))) GOTO 100    ! TEST BIT 7
+        ENDDO
+        RETURN
+200     PRINT *, 'TIMED OUT uDELAY',ndel,itic
+        RETURN
+        END
+c *********************** GET4 ************************
+C COMBINES FOUR BYTES INTO AN INT4 WORD
+        SUBROUTINE GET4 (I4OUT,HI,M2,M1,LO)
+        INTEGER*4 I4OUT
+        INTEGER*2 HI,M2,M1,LO
+        I4OUT = HI
+        I4OUT = ISHFT(I4OUT,8) + M2
+        I4OUT = ISHFT(I4OUT,8) + M1
+        I4OUT = ISHFT(I4OUT,8) + LO
+        RETURN
+        END
+C ********************** GET2 *************************
+C COMBINES TWO BYTES INTO AN INT2 WORD
+        SUBROUTINE GET2 (I2OUT,HI,LO)
+        INTEGER*2 HI,LO,I2OUT
+        I2OUT = HI
+C        I2OUT = I2OUT*256 + LO
+        I2OUT = ISHFT(I2OUT,8) + LO
+        RETURN
+        END
+C ********************* FIL320 ***********************
+        SUBROUTINE FIL320
+        INCLUDE 'PROLOGUE.INC'
+        AVGB(1) = AVGB(1) + ((AVGB(0) - AVGB(1))*.05)
+        AVGB(2) = AVGB(2) + ((AVGB(1) - AVGB(2))*.05)
+        AVGB(3) = AVGB(3) + ((AVGB(2) - AVGB(3))*.05)
+        RETURN
+        END
+C ********************* RELMOV ***********************
+        SUBROUTINE RELMOV
+        INCLUDE 'PROLOGUE.INC'
+c        print *, 'rel1'
+        IF(ISTEPS .EQ. 0) RETURN
+        IF(ISTEPS .LT. 0) PORTAB = IBSET(PORTAB,3) !BIT 3 HI FOR CW
+        IF(ISTEPS .GT. 0) PORTAB = IBCLR(PORTAB,3) !BIT 3 LO FOR CCW
+c        print*, 'rel1a'
+        CALL OUTPUTW(IOADD(15),PORTAB)       !SEND IT
+        NSTEPS = NSTEPS + ISTEPS
+c        print *, 'rel2',stsw,isteps
+c        OPEN(1,FILE='STFILE',ACCESS='DIRECT',RECL=4,FORM='UNFORMATTED')
+c        WRITE (1,REC=1) NSTEPS
+c        CLOSE(1)
+c        print*, 'rel3'
+        CALL STST(NSTEPS)
+        DATA(3) = ST_SCALE*NSTEPS
+        IVALUE = ABS(ISTEPS)
+        ITEMP = IAND(IVALUE,#FF)
+c        print *, 'rel4'
+        CALL OUTPUT (IOADD(5),ITEMP)
+        ITEMP = ISHFT(IVALUE,-8)
+        CALL OUTPUT (IOADD(5),ITEMP)
+C STROBE BIT 6
+c        print *, 'rel5'
+        PORTAB = IBSET(PORTAB,6)  
+        CALL OUTPUTW (IOADD(15),PORTAB)
+        PORTAB = IBCLR(PORTAB,6)
+        CALL OUTPUTW (IOADD(15),PORTAB)
+        RETURN
+        END
+C ********************* HZ_200 *************************
+        SUBROUTINE HZ_200
+        INCLUDE 'PROLOGUE.INC'
+        CALL IAD        !READ A/D
+C CROSS ACCELEROMETER LOOP 
+        ACC = IRAW (3,1)
+        FACCX = FACCX + (ACC-FACCX)/9.      !LAG ACCELEROMETER
+        SUMX = (SUMX+(FACCX*PERX))*TORSW
+        OUT = DAMPX*FACCX + SUMX
+C CROSS TORQUE MOTOR LOOP
+        GX = -IRAW(0,1)
+        FGX = FGX + (GX-FGX)/11000.         !CALCULATE GYRO BIAS
+        GX = GX - BIASX
+        SUMGX = (SUMGX+OUT+GX)*TORSW
+        TX = TX + 0.1*SUMGX + GX - TIX
+        TIX = TIX - TIX*ALEADX + TX
+        TOR = (GAINX*TX - DATACC(13))*TORSW
+        IF (TOR .GT. +32767.) TOR = +32767.
+        IF (TOR .LT. -32767.) TOR = -32767.
+        IDAC(1) = TOR
+C LONG ACCELEROMETER LOOP
+        ACC = IRAW(4,1)
+        FACCL = FACCL + (ACC-FACCL)/9.      !LAG ACCELEROMETER
+        SUML = (SUML+(FACCL*PERL))*TORSW
+        OUT = DAMPL*FACCL + SUML
+C LONG TORQUE MOTOR LOOP
+        GL = -IRAW(1,1)
+        FGL = FGL +(GL-FGL)/11000.          !CALCULATE GYRO BIAS
+        GL = GL - BIASL
+        SUMGL = (SUMGL+OUT+GL)*TORSW
+        TL = TL + 0.1*SUMGL + GL - TIL
+        TIL = TIL - TIL*ALEADL + TL
+        TOR =(GAINL*TL - DATACC(14))*TORSW
+        IF (TOR .GT. +32767.) TOR = +32767.
+        IF (TOR .LT. -32767.) TOR = -32767.
+        IDAC(2) = TOR
+C UPDATE DACS
+        CALL OUTPUTW (IOADD(8),IDAC(1))    
+        CALL OUTPUTW (IOADD(9),IDAC(2))    
+C ACCUMULATE RAW INPUTS
+        DATA0(1) = DATA0(1) + IRAW(3,1)     !XACC
+        DATA0(2) = DATA0(2) + IRAW(4,1)     !LACC
+        DATA0(3) = DATA0(3) + IRAW(5,1)     !BEAM
+        DATA0(4) = DATA0(4) + IRAW(2,1)     !0V
+C SCHEDULE EVENTS
+        I200 = I200+1
+        IF (MOD(I200,8) .EQ. 0) CALL HZ_25
+        IF (I200 .EQ. 201) I200 = 1
+        RETURN
+        END
+C ******************** HZ_25 **************************
+        SUBROUTINE HZ_25
+        INCLUDE 'PROLOGUE.INC'
+C PHASE CROSS-COUPLING MONITORS (APPROX 1/25 SEC FILTER)
+C DIVIDE BY 8 BECAUSE DATA ARE SUM OF 8 SAMPLES
+C        print* ,'hz_25', i200
+        DATACC(1) = DATACC(1) + (DATA0(1)/8.- DATACC(1))*AFILT(1)
+        DATACC(2) = DATACC(2) + (DATA0(2)/8.- DATACC(2))*AFILT(2)
+        DATACC(3) = DATA0(3)/8.
+        DATACC(4) = DATACC(4) + (DATA0(2)/8.- DATACC(4))*AFILT(4)
+        DATACC(13)=DATACC(13)+(DATA0(1)*COMPF(0)-DATACC(13))*AFILT(5)
+        DATACC(14)=DATACC(14)+(DATA0(2)*COMPF(1)-DATACC(14))*AFILT(6)
+        DATACC(13) = DATACC(13)*TORSW
+        DATACC(14) = DATACC(14)*TORSW
+C COMPUTE BEAM SLOPE FOR CROSS-COUPLING ONLY
+C BEAM = (RAW DATA - A/D OFFSET - BEAM OFFSET)/ARBITRARY SCALE
+        BEAML = BEAM
+        BEAM = (DATACC(3) - DATA(2)/200.)/2.
+        DATACC(5) = BEAM - BEAML
+C COMPUTE MONITORS
+        DATACC(6) = DATACC(6) + DATACC(4)*BEAM/256000.    !VCC
+        DATACC(7) = DATACC(7) + DATACC(5)*DATACC(2)/6400. !AL
+        DATACC(8) = DATACC(8) + DATACC(5)*DATACC(1)/6400. !AX
+        DATACC(9) = DATACC(9) + DATACC(5)/80.             !VE (PARTIAL)
+        DATACC(10) = DATACC(10) + DATACC(1)/80000.        !AX2 (PARTIAL)
+        DATACC(11) = DATACC(11) + DATA0(1)*DATA0(1)/25600000. !XACC*XACC
+        DATACC(12) = DATACC(12) + DATA0(2)*DATA0(2)/25600000. !LACC*LACC
+        DO I=1,4
+            DATA25(I) = DATA25(I) + DATA0(I) 
+            DATA0(I) = 0.
+        ENDDO
+C DO ONE SECOND STUFF
+        IF (I200 .LT. 200) RETURN
+C STORE 1 SEC DATA
+        DO I=6,12
+           DATA(I) = DATACC(I)
+           DATACC(I) = 0.
+        ENDDO
+        DATA(9) = DATA(9)*DATA(9)       !SQUARE FOR VE
+        DATA(10) = DATA(10)*DATA(8)     !PRODUCT FOR AX2
+C .001525925=1000/3276.7/200 CONVERTS TO MV.
+        DATA(13) = DATA25(1)*.001525925
+        DATA(14) = DATA25(2)*.001525925
+        DATA(5)  = (DATA25(3)-DATA(2)/8.)*.001525925
+        DATA(2)  = DATA25(4)
+        DATA25(1) = 0.
+        DATA25(2) = 0.
+        DATA25(3) = 0.
+        DATA25(4) = 0.
+        I1SEC = 1       !SIGNAL SYSTEM
+        RETURN
+        END
+C ************************* IAD ***************************
+        SUBROUTINE IAD
+C READS 16 CHANNELS WITH PRESELECTED GAIN FOR ADS7805
+C
+        INCLUDE 'PROLOGUE.INC'
+        INTEGER *2 CHTABLE(0:15)
+        DATA CHTABLE /#0000,#4000,#8000,#C000,#1000,#5000,#9000,#D000,
+     1                #2000,#6000,#A000,#E000,#3000,#7000,#B000,#F000/
+C        DATA CHTABLE /#0000,#1000,#2000,#3000,#4000,#5000,#6000,#7000,
+C     1                #8000,#9000,#A000,#B000,#C000,#D000,#E000,#F000/
+        DO ICH=0,15
+C SET GAIN AND CHANEL
+        PORTAB = IAND(PORTAB,#0CFF)        !CLEAR CONTROL BITS
+        PORTAB = IOR(PORTAB,CHTABLE(ICH))  !SELECT CHANNEL
+        PORTAB = IOR(PORTAB,IRAW(ICH,0))   !SELECT GAIN
+        CALL OUTPUTW (IOADD(15),PORTAB)    !SAVE GAIN AND SET CHANNEL
+        call udelay (1,50)
+c        call udelay (5)
+c seems to work fine with no delay but tweak on final board
+        IVALUE = 0
+        I = 0
+        CALL OUTPUTW (IOADD(12),IVALUE)    !START CONVERSION
+20      CONTINUE
+        CALL FETCHW (IOADD(15),IVALUE)     !DATA READY ?
+        IF (.NOT.BTEST(IVALUE,5)) THEN
+           I = I+1
+           IF (I .GT. 5000) GOTO 40
+           GOTO 20
+        ENDIF
+        CALL FETCHW (IOADD(12),IRAW(ICH,1))  !GET DATA
+        IF (IRAW(ICH,1) .LT. -32700) IRAW(ICH,1)=-32700 !FIX COMPILER BUG
+        IRAW(ICH,1) = -IRAW(ICH,1)
+c        IRAW(ICH,1) = NOT(IRAW(ICH,1))    !INVERT SIGN
+        ENDDO
+        RETURN
+40      PRINT *, 'TIMED OUT IAD',ich
+        RETURN
+        END
+C *************************** DUMPCHK ******************************
+        SUBROUTINE DUMPCHK
+        INCLUDE 'PROLOGUE.INC'
+        DATA LIMD /9/
+        IDUMP = IDUMP+1
+        IF (IDUMP .GT. 100)   IDUMP = 100
+        IF (IABS(IDAC(1)).LT.1024 .AND. IABS(IDAC(2)).LT.1024) IDUMP=0
+        DUMP = 0
+        IF(IDUMP .GT. LIMD) DUMP = 1
+        RETURN
+        END
+C ************************** HEATCHK ******************************
+        SUBROUTINE HEATCHK
+        INCLUDE 'PROLOGUE.INC'
+        LOGICAL HEATBIT(0:2,0:1)  !BIT0-LGYRO;BIT1-XGYRO;BIT2-METER
+        INTEGER*2 IFL(0:2)
+        DATA LIMH /90/
+        CALL FETCHW (IOADD(15),PORTCD)
+c INITIALIZE PARAMETERS FIRST TIME THROUGH
+        IF (FIRST .EQ. 0) THEN
+            FIRST = 1
+            DO I=0,2
+                HEATBIT(I,0) = BTEST(PORTCD,I+1)
+                IFL(I) = 0
+            ENDDO
+            RETURN
+        ENDIF
+        DO I=0,2
+            HEATBIT(I,1) = BTEST(PORTCD,I+1)
+            IHEAT(I) = IHEAT(I) + 1
+            IF (IHEAT(I) .GT. 100)  IHEAT(I) = 100
+            IF (HEATBIT(I,0) .NEQV. HEATBIT(I,1)) THEN
+                IF(IFL(I) .GE. 5) THEN                   
+                   IHEAT(I) = 0
+                   IFL(I) = 0
+                ENDIF
+            ELSE
+                IFL(I) = IFL(I)+1
+            ENDIF
+            HEATBIT(I,0) = HEATBIT(I,1)
+        ENDDO
+        XHTR = 0        !always good for G-2000
+        LHTR = 0
+        MHTR = 1
+c        IF(IHEAT(0) .LT. LIMH) LHTR = 0   !not needed for G-2000
+c        IF(IHEAT(1) .LT. LIMH) XHTR = 0
+        IF(IHEAT(2) .LT. LIMH) MHTR = 0
+        RETURN
+        END
+C ************************** ALARM *************************
+        SUBROUTINE ALARM
+C TESTS FOR HEATER CYCLES AND DUMPS AND SHUTS DOWN SYSTEM
+        INCLUDE 'PROLOGUE.INC'
+        IF(XHTR .EQ. 0 .AND. LHTR .EQ. 0 .AND. MHTR .EQ. 0 .AND.  
+     1  DUMP .EQ. 0) RETURN
+        IF (LARMSW .NE. 0) THEN
+            TORSW = 0
+            STSW  = 0
+            ALARMFL = 1
+            IDAC(1) = 0
+            IDAC(2) = 0
+            CALL OUTPUTW (IOADD(8),IDAC(1))    
+            CALL OUTPUTW (IOADD(9),IDAC(2))    
+            PORTAB = IBSET(PORTAB,2)    !TURN ON REMOTE ALARM
+            PORTAB = IBCLR(PORTAB,0)    !TURN OFF 200 Hz
+            PORTAB = IBCLR(PORTAB,1)    !TURN OFF TOR MOTOR
+            CALL OUTPUTW(IOADD(15),PORTAB)
+        ENDIF
+        RETURN
+        END
+C ***************** DELAY ******************************
+        SUBROUTINE DELAY (IDEL)
+C PROVIDES A SHORT DELAY (approx 1 uS)
+c        IDEL = IDEL + IDEL/2    !33 MHz
+        IDEL = IDEL*3            !100 MHz
+10      CONTINUE
+        IF (IDEL .EQ. 0) RETURN
+        IDEL = IDEL-1
+        GOTO 10
+        RETURN
+        END
+
